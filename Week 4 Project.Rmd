@@ -1,0 +1,174 @@
+---
+title: "Predicting Exercise Class"
+date: "10/2/2021"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r message=FALSE, warning=FALSE}
+library(randomForest)
+library(caret)
+```
+
+### Executive Summary
+  This report uses data collected by several accelerometers strapped on the body to create a prediction model which predicts the activity performed by participants. The prediction model we find uses random forests with a .36% error rate. It predicts the final data set activities with 100% accuracy. 
+
+## Defining the Error Rate
+
+Before we being with the prediction model design, we set the error rate we are trying to achieve. Since the goal is to predict the 20 cases given in the assignment and input the results in a quiz, we will use the quiz passing grade (80%) as the accuracy goal, or a 20% out of sample error rate. 
+
+# Data
+
+The data we are looking at are movements recorded by accelerometers on a belt, forearm, arm, and a dumbbell.
+
+The training data can be found at:  
+  
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv  
+  
+The testing data can be found at:  
+  
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+  
+For more information:  
+  
+http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har#weight_lifting_exercises
+
+## Loading in the Data
+```{r cache=TRUE}
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv","pml-training.csv", method="curl")
+download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv","pml-testing.csv", method="curl")
+data<-read.csv("pml-training.csv", header=TRUE, sep=",",row.names = 1)
+quiz_data<-read.csv("pml-testing.csv", header=TRUE, sep=",",row.names = 1)
+```
+
+First, we take a look at the structure of the data. We see that the data has 159 variables and 19622 observations. We will create a a training and test set. The large data set means that model code run time will be long so we need to clean the data up as much as possible before we create the model to minimize run time.
+```{r eval=FALSE}
+dim(data)
+colnames(data)
+View(data)
+str(data)
+View(quiz_data)
+```
+
+## Pre-processing the Data
+Looking at a table of both data sets we see that is it not tidy. There are a lot of missing values and some variables are factors that should be numeric. Because pre-processing needs to be done the same way on the training and test sets, we will partition the data after cleaning it up and apply the clean-up code to both the final test set and this original set. We implement the following changes:  
+
+* Convert the factor variables with more than 30 levels or with "#DIV/0!" as a level into numeric variables.  
+
+```{r warning=FALSE}
+for(i in 1:ncol(data)){
+  if (class(data[,i] )=="factor"){
+    if(length(levels(data[,i]))>30){
+      data[,i]<-as.numeric(as.character(data[,i]))
+    }
+  }
+}
+for (i in 1:ncol(data)){
+  if(class(data[,i])=="factor"){
+    if((levels(data[,i])[2]=="#DIV/0!")==TRUE){
+      data[,i]<-NA
+      }
+    }
+  } 
+for(i in 1:ncol(quiz_data)){
+       if (class(quiz_data[,i] )=="factor"){
+             if(length(levels(quiz_data[,i]))>30){
+                quiz_data[,i]<-as.numeric(as.character(quiz_data[,i]))
+               }
+         }
+}
+```
+
+* Remove the columns with missing values.
+```{r}
+data1<-data[,!is.na(data[1,])]
+quiz_data1<-quiz_data[,!is.na(quiz_data[1,])]
+
+```
+
+* Remove the time stamp variables because this is not a time series prediction so that information is irrelevant in this prediction.  
+
+```{r}
+data1<-data1[,-c(2:4)]
+quiz_data1<-quiz_data1[,-c(2:4)]
+```
+
+* Remove zero variance predictors that have a minimal impact on model.  
+```{r}
+data1<-data1[,-nearZeroVar(data1)]
+quiz_data1<-quiz_data1[,-nearZeroVar(quiz_data1)]
+```
+
+Another look at the data structure shows we have a much more manageable 55 number of variables. 
+
+## Splitting the Data 
+We will be splitting it into a training and testing set. We will split the data into the following percentages: training - 70%, testing - 30%.
+
+```{r splitting data}
+set.seed(52346)
+inTrain<-createDataPartition(data1$classe,p=.7, list=FALSE)
+training<-data1[inTrain,]
+testing<-data1[-inTrain,]
+```
+
+# Model Selection
+
+We test 3 different prediction models:  
+* Random Forest  
+* Trees  
+* Boosting + Trees  
+
+The point of testing all three is to see which one has the highest accuracy using cross validation. The one with the highest accuracy will be used to predict the activity class of the final test set.
+
+## Random Forest  
+
+```{r boosting, cache=TRUE, comment=NA}
+mod2<-randomForest(classe~.,training, ntree=400)
+pred2<-predict(mod2,testing)
+confusionMatrix(pred2,testing$classe)$table
+confusionMatrix(pred2,testing$classe)$overall[["Accuracy"]]
+```
+
+## Trees  
+
+```{r forest, cache=TRUE,comment=NA}
+mod<-train(classe~.,data=training,preProcess="pca",method="rpart")
+pred<-predict(mod,testing)
+confusionMatrix(pred,testing$classe)$table
+confusionMatrix(pred,testing$classe)$overall[["Accuracy"]]
+```
+
+## Boosting with Trees  
+
+```{r trees, cache=TRUE, comment=NA}
+mod1<-train(classe~.,data=training,preProcess="pca",method="gbm", verbose=FALSE)
+pred1<-predict(mod1,testing)
+confusionMatrix(pred1,testing$classe)$table
+confusionMatrix(pred1,testing$classe)$overall[["Accuracy"]]
+```
+
+Boosting with trees and random forest both meet the 80% accuracy goal. We will be moving forward with the random forest model because it has a near perfect accuracy. This lines up with what was taught in class, that boosting and random forests are the often times the more superior algorithms though not always the most useable due to their running time. Since this data set is small enough to run for this project we will stick with random forest and keep the high number of variables.
+
+# Out of sample error  
+
+The out of sample error is 1-accuracy on a sample not used for training.
+
+```{r comment=NA}
+err1<-1-confusionMatrix(pred2,testing$classe)$overall[["Accuracy"]]
+err1
+```
+
+The out of sample error rate for the random forest model used in this asignment is `r err1`.
+
+# Predicting 20 cases
+
+```{r}
+predrf<-predict(mod2,quiz_data1)
+```
+
+These answers were checked in the Coursera Prediction Quiz with a 100% accuracy.
+
+### Data Citation
+
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6. 
